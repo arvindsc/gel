@@ -1,221 +1,302 @@
-/* eslint-disable */
-var gulp = require('gulp'),
-  path = require('path'),
-  ngc = require('@angular/compiler-cli/src/main').main,
-  rollup = require('gulp-rollup'),
-  rename = require('gulp-rename'),
-  del = require('del'),
-  runSequence = require('run-sequence'),
-  inlineResources = require('./tools/gulp/inline-resources');
+var asyncDone = require('async-done');
+var gulp = require('gulp');
+var gutil = require('gulp-util');
+var ddescribeIit = require('gulp-ddescribe-iit');
+var shell = require('gulp-shell');
+var ghPages = require('gulp-gh-pages');
+var gulpFile = require('gulp-file');
+var del = require('del');
+var clangFormat = require('clang-format');
+var gulpFormat = require('gulp-clang-format');
+var runSequence = require('run-sequence');
+var tslint = require('gulp-tslint');
+var webpack = require('webpack');
+var typescript = require('typescript');
+var exec = require('child_process').exec;
+var path = require('path');
+var os = require('os');
+var remapIstanbul = require('remap-istanbul/lib/gulpRemapIstanbul');
 
-const rootFolder = path.join(__dirname);
-const srcFolder = path.join(rootFolder, 'src');
-const tmpFolder = path.join(rootFolder, '.tmp');
-const buildFolder = path.join(rootFolder, 'build');
-const distFolder = path.join(rootFolder, 'dist');
+var PATHS = {
+  src: 'src/**/*.ts',
+  srcIndex: 'src/index.ts',
+  specs: 'src/**/*.spec.ts',
+  testHelpers: 'src/test/**/*.ts',
+  demo: 'demo/**/*.ts',
+  demoDist: 'demo/dist/**/*',
+  typings: 'typings/index.d.ts',
+  jasmineTypings: 'typings/globals/jasmine/index.d.ts',
+  demoApiDocs: 'demo/src',
+  coverageJson: 'coverage/json/coverage-final.json'
+};
 
-/**
- * 1. Delete /dist folder
- */
-gulp.task('clean:dist', function () {
+const docsConfig = Object.assign({port: 9090}, getLocalConfig());
 
-  // Delete contents but not dist folder to avoid broken npm links
-  // when dist directory is removed while npm link references it.
-  return deleteFolders([distFolder + '/**', '!' + distFolder]);
+function platformPath(path) {
+  return /^win/.test(os.platform()) ? `${path}.cmd` : path;
+}
+
+function webpackCallBack(taskName, gulpDone) {
+  return function(err, stats) {
+    if (err) throw new gutil.PluginError(taskName, err);
+    gutil.log(`[${taskName}]`, stats.toString());
+    gulpDone();
+  }
+}
+
+// Transpiling & Building
+
+gulp.task('clean:build', function() { return del('dist/'); });
+
+gulp.task('ngc', function(cb) {
+  var executable = path.join(__dirname, platformPath('/node_modules/.bin/ngc'));
+  exec(`${executable} -p ./tsconfig-es2015.json`, (e) => {
+    if (e) console.log(e);
+    del('./dist/waste');
+    cb();
+  }).stdout.on('data', function(data) { console.log(data); });
 });
 
-/**
- * 2. Clone the /src folder into /.tmp. If an npm link inside /src has been made,
- *    then it's likely that a node_modules folder exists. Ignore this folder
- *    when copying to /.tmp.
- */
-gulp.task('copy:source', function () {
-  return gulp.src([`${srcFolder}/**/*`, `!${srcFolder}/node_modules`])
-    .pipe(gulp.dest(tmpFolder));
+gulp.task('umd', function(cb) {
+  function ngExternal(ns) {
+    var ng2Ns = `@angular/${ns}`;
+    return {root: ['ng', ns], commonjs: ng2Ns, commonjs2: ng2Ns, amd: ng2Ns};
+  }
+
+  function rxjsExternal(context, request, cb) {
+    if (/^rxjs\/add\/observable\//.test(request)) {
+      return cb(null, {root: ['Rx', 'Observable'], commonjs: request, commonjs2: request, amd: request});
+    } else if (/^rxjs\/add\/operator\//.test(request)) {
+      return cb(null, {root: ['Rx', 'Observable', 'prototype'], commonjs: request, commonjs2: request, amd: request});
+    } else if (/^rxjs\//.test(request)) {
+      return cb(null, {root: ['Rx'], commonjs: request, commonjs2: request, amd: request});
+    }
+    cb();
+  }
+
+  webpack(
+      {
+        entry: './temp/index.js',
+        output: {filename: 'dist/bundles/gel-core.js', library: 'ngb', libraryTarget: 'umd'},
+        devtool: 'source-map',
+        externals: [
+          {
+            '@angular/core': ngExternal('core'),
+            '@angular/common': ngExternal('common'),
+            '@angular/forms': ngExternal('forms')
+          },
+          rxjsExternal
+        ]
+      },
+      webpackCallBack('webpack', cb));
 });
 
-/**
- * 3. Inline template (.html) and style (.css) files into the the component .ts files.
- *    We do this on the /.tmp folder to avoid editing the original /src files
- */
-gulp.task('inline-resources', function () {
-  return Promise.resolve()
-    .then(() => inlineResources(tmpFolder));
+gulp.task('npm', function() {
+  var pkgJson = require('./package.json');
+  var targetPkgJson = {};
+  var fieldsToCopy = ['version', 'description', 'keywords', 'author', 'repository', 'license', 'bugs', 'homepage'];
+
+  targetPkgJson['name'] = '@gel-core/gel-core';
+
+  fieldsToCopy.forEach(function(field) { targetPkgJson[field] = pkgJson[field]; });
+
+  targetPkgJson['main'] = 'bundles/gel-core.js';
+  targetPkgJson['module'] = 'index.js';
+  targetPkgJson['typings'] = 'index.d.ts';
+
+  targetPkgJson.peerDependencies = {};
+  Object.keys(pkgJson.dependencies).forEach(function(dependency) {
+    targetPkgJson.peerDependencies[dependency] = `^${pkgJson.dependencies[dependency]}`;
+  });
+
+  return gulp.src('README.md')
+      .pipe(gulpFile('package.json', JSON.stringify(targetPkgJson, null, 2)))
+      .pipe(gulp.dest('dist'));
 });
 
-
-/**
- * 4. Run the Angular compiler, ngc, on the /.tmp folder. This will output all
- *    compiled modules to the /build folder.
- *
- *    As of Angular 5, ngc accepts an array and no longer returns a promise.
- */
-gulp.task('ngc', function () {
-  ngc([ '--project', `${tmpFolder}/tsconfig.es5.json` ]);
-  return Promise.resolve()
+gulp.task('changelog', function() {
+  var conventionalChangelog = require('gulp-conventional-changelog');
+  return gulp.src('CHANGELOG.md', {})
+      .pipe(conventionalChangelog({preset: 'angular', releaseCount: 1}, {
+        // Override release version to avoid `v` prefix for git comparison
+        // See https://github.com/conventional-changelog/conventional-changelog-core/issues/10
+        currentTag: require('./package.json').version
+      }))
+      .pipe(gulp.dest('./'));
 });
 
-/**
- * 5. Run rollup inside the /build folder to generate our Flat ES module and place the
- *    generated file into the /dist folder
- */
-gulp.task('rollup:fesm', function () {
-  return gulp.src(`${buildFolder}/**/*.js`)
-  // transform the files here.
-    .pipe(rollup({
+// Testing
 
-      // Bundle's entry point
-      // See "input" in https://rollupjs.org/#core-functionality
-      input: `${buildFolder}/index.js`,
+function startKarmaServer(isTddMode, isSaucelabs, done) {
+  var karmaServer = require('karma').Server;
+  var travis = process.env.TRAVIS;
 
-      // Allow mixing of hypothetical and actual files. "Actual" files can be files
-      // accessed by Rollup or produced by plugins further down the chain.
-      // This prevents errors like: 'path/file' does not exist in the hypothetical file system
-      // when subdirectories are used in the `src` directory.
-      allowRealFiles: true,
+  var config = {configFile: `${__dirname}/karma.conf.js`, singleRun: !isTddMode, autoWatch: isTddMode};
 
-      // A list of IDs of modules that should remain external to the bundle
-      // See "external" in https://rollupjs.org/#core-functionality
-      external: [
-        '@angular/core',
-        '@angular/common'
-      ],
+  if (travis) {
+    config['reporters'] = ['dots'];
+    config['browsers'] = ['Firefox'];
+  }
 
-      // Format of generated bundle
-      // See "format" in https://rollupjs.org/#core-functionality
-      format: 'es'
-    }))
-    .pipe(gulp.dest(distFolder));
+  if (isSaucelabs) {
+    config['reporters'] = ['dots', 'saucelabs'];
+    config['browsers'] =
+        ['SL_CHROME', 'SL_FIREFOX', 'SL_IE10', 'SL_IE11', 'SL_EDGE14', 'SL_EDGE15', 'SL_SAFARI10', 'SL_SAFARI11'];
+
+    if (process.env.TRAVIS) {
+      var buildId = `TRAVIS #${process.env.TRAVIS_BUILD_NUMBER} (${process.env.TRAVIS_BUILD_ID})`;
+      config['sauceLabs'] = {build: buildId, tunnelIdentifier: process.env.TRAVIS_JOB_NUMBER};
+      process.env.SAUCE_ACCESS_KEY = process.env.SAUCE_ACCESS_KEY.split('').reverse().join('');
+    }
+  }
+
+  new karmaServer(config, done).start();
+}
+
+gulp.task('clean:tests', function() { return del(['temp/', 'coverage/']); });
+
+gulp.task('build:tests', ['clean:tests'], (cb) => {
+  exec(path.join(__dirname, platformPath('/node_modules/.bin/tsc')), (e) => {
+    if (e) console.log(e);
+    cb();
+  }).stdout.on('data', function(data) { console.log(data); });
 });
 
-/**
- * 6. Run rollup inside the /build folder to generate our UMD module and place the
- *    generated file into the /dist folder
- */
-gulp.task('rollup:umd', function () {
-  return gulp.src(`${buildFolder}/**/*.js`)
-  // transform the files here.
-    .pipe(rollup({
+gulp.task(
+    'ddescribe-iit', function() { return gulp.src(PATHS.specs).pipe(ddescribeIit({allowDisabledTests: false})); });
 
-      // Bundle's entry point
-      // See "input" in https://rollupjs.org/#core-functionality
-      input: `${buildFolder}/index.js`,
-
-      // Allow mixing of hypothetical and actual files. "Actual" files can be files
-      // accessed by Rollup or produced by plugins further down the chain.
-      // This prevents errors like: 'path/file' does not exist in the hypothetical file system
-      // when subdirectories are used in the `src` directory.
-      allowRealFiles: true,
-
-      // A list of IDs of modules that should remain external to the bundle
-      // See "external" in https://rollupjs.org/#core-functionality
-      external: [
-        '@angular/core',
-        '@angular/common'
-      ],
-
-      // Format of generated bundle
-      // See "format" in https://rollupjs.org/#core-functionality
-      format: 'umd',
-
-      // Export mode to use
-      // See "exports" in https://rollupjs.org/#danger-zone
-      exports: 'named',
-
-      // The name to use for the module for UMD/IIFE bundles
-      // (required for bundles with exports)
-      // See "name" in https://rollupjs.org/#core-functionality
-      name: 'gel-core',
-
-      // See "globals" in https://rollupjs.org/#core-functionality
-      globals: {
-        typescript: 'ts'
-      }
-
-    }))
-    .pipe(rename('gel-core.umd.js'))
-    .pipe(gulp.dest(distFolder));
+gulp.task('test', ['build:tests'], function(done) {
+  startKarmaServer(false, false, () => {
+    asyncDone(
+        () => { return gulp.src(PATHS.coverageJson).pipe(remapIstanbul({reports: {'html': 'coverage/html'}})); }, done);
+  });
 });
 
-/**
- * 7. Copy all the files from /build to /dist, except .js files. We ignore all .js from /build
- *    because with don't need individual modules anymore, just the Flat ES module generated
- *    on step 5.
- */
-gulp.task('copy:build', function () {
-  return gulp.src([`${buildFolder}/**/*`, `!${buildFolder}/**/*.js`])
-    .pipe(gulp.dest(distFolder));
+gulp.task('remap-coverage', function() {
+  return gulp.src(PATHS.coverageJson).pipe(remapIstanbul({reports: {'html': 'coverage/html'}}));
 });
 
-/**
- * 8. Copy package.json from /src to /dist
- */
-gulp.task('copy:manifest', function () {
-  return gulp.src([`${srcFolder}/package.json`])
-    .pipe(gulp.dest(distFolder));
+gulp.task('tdd', ['clean:tests'], (cb) => {
+  var executable = path.join(__dirname, platformPath('/node_modules/.bin/tsc'));
+  var startedKarma = false;
+
+  exec(`${executable} -w`, (e) => {
+    cb(e && e.signal !== 'SIGINT' ? e : undefined);
+  }).stdout.on('data', function(data) {
+
+    console.log(data);
+
+    // starting karma in tdd as soon as 'tsc -w' finishes first compilation
+    if (!startedKarma) {
+      startedKarma = true;
+      startKarmaServer(true, false, function(err) { process.exit(err ? 1 : 0); });
+    }
+  });
 });
 
-/**
- * 9. Copy README.md from / to /dist
- */
-gulp.task('copy:readme', function () {
-  return gulp.src([path.join(rootFolder, 'README.MD')])
-    .pipe(gulp.dest(distFolder));
+gulp.task('saucelabs', ['build:tests'], function(done) {
+  startKarmaServer(false, true, function(err) {
+    done(err);
+    process.exit(err ? 1 : 0);
+  });
 });
 
-/**
- * 10. Delete /.tmp folder
- */
-gulp.task('clean:tmp', function () {
-  return deleteFolders([tmpFolder]);
+// Formatting
+
+gulp.task('lint', function() {
+  return gulp.src([PATHS.src, PATHS.demo, '!demo/src/api-docs.ts'])
+      .pipe(tslint({configuration: require('./tslint.json'), formatter: 'prose'}))
+      .pipe(tslint.report({summarizeFailureOutput: true}));
 });
 
-/**
- * 11. Delete /build folder
- */
-gulp.task('clean:build', function () {
-  return deleteFolders([buildFolder]);
+gulp.task('check-format', function() {
+  return doCheckFormat().on(
+      'warning', function(e) { console.log("NOTE: this will be promoted to an ERROR in the continuous build"); });
 });
 
-gulp.task('compile', function () {
-  runSequence(
-    'clean:dist',
-    'copy:source',
-    'inline-resources',
-    'ngc',
-    'rollup:fesm',
-    'rollup:umd',
-    'copy:build',
-    'copy:manifest',
-    'copy:readme',
-    'clean:build',
-    'clean:tmp',
-    function (err) {
-      if (err) {
-        console.log('ERROR:', err.message);
-        deleteFolders([distFolder, tmpFolder, buildFolder]);
-      } else {
-        console.log('Compilation finished succesfully');
-      }
-    });
+gulp.task('enforce-format', function() {
+  return doCheckFormat().on('warning', function(e) {
+    console.log("ERROR: You forgot to run clang-format on your change.");
+    console.log("See https://github.com/gel-core/gel-core/blob/master/DEVELOPER.md#clang-format");
+    process.exit(1);
+  });
 });
 
-/**
- * Watch for any change in the /src folder and compile files
- */
-gulp.task('watch', function () {
-  gulp.watch(`${srcFolder}/**/*`, ['compile']);
+function doCheckFormat() {
+  return gulp
+      .src([
+        'gulpfile.js', 'karma-test-shim.js', 'misc/api-doc.js', 'misc/api-doc.spec.js', 'misc/demo-gen.js', PATHS.src
+      ])
+      .pipe(gulpFormat.checkFormat('file', clangFormat));
+}
+
+// Demo
+
+gulp.task('generate-docs', function() {
+  var getApiDocs = require('./misc/get-doc');
+  var docs = `const API_DOCS = ${JSON.stringify(getApiDocs(), null, 2)};\n\nexport default API_DOCS;`;
+
+  return gulpFile('api-docs.ts', docs, {src: true}).pipe(gulp.dest(PATHS.demoApiDocs));
 });
 
-gulp.task('clean', ['clean:dist', 'clean:tmp', 'clean:build']);
+gulp.task('generate-plunks', function() {
+  var getPlunker = require('./misc/plunk-gen');
+  var demoGenUtils = require('./misc/demo-gen-utils');
+  var plunks = [];
 
-gulp.task('build', ['clean', 'compile']);
-gulp.task('build:watch', ['build', 'watch']);
-gulp.task('default', ['build:watch']);
+  demoGenUtils.getDemoComponentNames().forEach(function(componentName) {
+    plunks = plunks.concat(demoGenUtils.getDemoNames(componentName).reduce(function(soFar, demoName) {
+      soFar.push({name: `${componentName}/demos/${demoName}/plnkr.html`, source: getPlunker(componentName, demoName)});
+      return soFar;
+    }, []));
+  });
 
-/**
- * Deletes the specified folder
- */
-function deleteFolders(folders) {
-  return del(folders);
+  return gulpFile(plunks, {src: true}).pipe(gulp.dest('demo/src/public/app/components'));
+});
+
+gulp.task('clean:demo', function() { return del('demo/dist'); });
+
+gulp.task('clean:demo-cache', function() { return del('.publish/'); });
+
+gulp.task(
+    'demo-server', ['generate-docs', 'generate-plunks'],
+    shell.task([`webpack-dev-server --port ${docsConfig.port} --config webpack.demo.js --inline --progress`]));
+
+gulp.task(
+    'build:demo', ['clean:demo', 'generate-docs', 'generate-plunks'],
+    shell.task(['webpack --config webpack.demo.js --progress --profile --bail'], {env: {MODE: 'build'}}));
+
+gulp.task(
+    'demo-server:aot', ['generate-docs', 'generate-plunks'],
+    shell.task(
+        [`webpack-dev-server --port ${docsConfig.port} --config webpack.demo.js --inline --progress`],
+        {env: {MODE: 'build'}}));
+
+gulp.task('demo-push', function() {
+  return gulp.src(PATHS.demoDist)
+      .pipe(ghPages({remoteUrl: "https://github.com/gel-core/gel-core.github.io.git", branch: "master"}));
+});
+
+// Public Tasks
+gulp.task('clean', ['clean:build', 'clean:tests', 'clean:demo', 'clean:demo-cache']);
+
+gulp.task('build', function(done) {
+  runSequence('ddescribe-iit', 'clean:build', 'ngc', 'umd', 'npm', done);
+});
+
+gulp.task(
+    'deploy-demo', function(done) { runSequence('clean:demo', 'build:demo', 'demo-push', 'clean:demo-cache', done); });
+
+gulp.task('default', function(done) { runSequence( 'ci', done); }); //ddescribe-iit', 'test
+
+gulp.task('ci', function(done) { runSequence( 'build:demo', done); });
+
+function getLocalConfig() {
+  try {
+    require.resolve('./local.docs.json');
+  } catch (e) {
+    return {};
+  }
+
+  return require('./local.docs.json');
 }

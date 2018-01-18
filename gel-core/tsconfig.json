@@ -1,14 +1,20 @@
 {
   "compilerOptions": {
-    "baseUrl": "./src",
+    "target": "ES5",
+    "lib": ["es2015", "dom"],
+    "module": "commonjs",
+    "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "moduleResolution": "node",
-    "rootDir": "./src",
-    "lib": [
-      "es2015",
-      "dom"
-    ],
-    "skipLibCheck": true,
-    "types": []
-  }
+    "noEmitOnError": true,
+    "outDir": "temp",
+    "sourceMap": true,
+    "baseUrl": "./node_modules",
+    "paths": {
+      "@gel-core/gel-core": ["../src/index"]
+    }
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "compileOnSave": false
 }
