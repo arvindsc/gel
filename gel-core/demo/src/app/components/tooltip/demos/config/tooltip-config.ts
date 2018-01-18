@@ -1,5 +1,5 @@
 import {Component} from '@angular/core';
-import {NgbTooltipConfig} from '@gel-core/gel-core';
+import {NgbTooltipConfig} from 'gel-core';
 
 @Component({
   selector: 'ngbd-tooltip-config',

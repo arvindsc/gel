@@ -1,4 +1,4 @@
-import {NgbTooltip} from '@gel-core/gel-core';
+import {NgbTooltip} from 'gel-core';
 import {Component, ViewChild} from '@angular/core';
 
 @Component({

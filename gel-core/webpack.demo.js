@@ -69,7 +69,7 @@ module.exports = function makeWebpackConfig() {
     extensions: ['.ts', '.js', '.css', '.scss', '.html'],
 
     alias: {
-      '@gel-core/gel-core': root('src/index.ts')
+      'gel-core': root('src/index.ts')
     }
   };
 

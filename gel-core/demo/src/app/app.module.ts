@@ -1,7 +1,7 @@
 import {NgModule} from '@angular/core';
 import {BrowserModule} from '@angular/platform-browser';
 
-import {NgbModule} from '@gel-core/gel-core';
+import {NgbModule} from 'gel-core';
 
 import {DefaultComponent} from './default';
 import {GettingStarted} from './getting-started';

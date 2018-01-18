@@ -25,7 +25,7 @@ import { Component, NgModule } from '@angular/core';
 import { BrowserModule } from '@angular/platform-browser';
 import { FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { HttpClientModule } from '@angular/common/http';
-import { NgbModule } from '@gel-core/gel-core';
+import { NgbModule } from 'gel-core';
 import { ${demoImports} } from '${demoImport}';
 
 @Component({
@@ -154,7 +154,7 @@ function generateConfigJs() {
     'tslib': 'npm:tslib/tslib.js',
     'typescript': 'npm:typescript@${versions.typescript}/lib/typescript.js',
 
-    '@gel-core/gel-core': 'npm:@gel-core/gel-core@${versions.ngBootstrap}/bundles/gel-core.js'
+    'gel-core': 'npm:gel-core@${versions.ngBootstrap}/bundles/gel-core.js'
   },
   packages: {
     app: {

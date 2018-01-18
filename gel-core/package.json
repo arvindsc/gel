@@ -1,6 +1,6 @@
 {
   "name": "gel-core",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Gel Component Library",
   "author": "Attache Software",
   "main": "dist/index.js",

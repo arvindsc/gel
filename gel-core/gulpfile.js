@@ -96,7 +96,7 @@ gulp.task('npm', function() {
   var targetPkgJson = {};
   var fieldsToCopy = ['version', 'description', 'keywords', 'author', 'repository', 'license', 'bugs', 'homepage'];
 
-  targetPkgJson['name'] = '@gel-core/gel-core';
+  targetPkgJson['name'] = 'gel-core';
 
   fieldsToCopy.forEach(function(field) { targetPkgJson[field] = pkgJson[field]; });
 

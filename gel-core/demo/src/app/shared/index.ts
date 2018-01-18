@@ -4,7 +4,7 @@ import {RouterModule} from '@angular/router';
 import {FormsModule, ReactiveFormsModule} from '@angular/forms';
 import {HttpClientModule} from '@angular/common/http';
 
-import {NgbModule} from '@gel-core/gel-core';
+import {NgbModule} from 'gel-core';
 
 import {ComponentWrapper} from './component-wrapper/component-wrapper.component';
 import {PageWrapper} from './page-wrapper/page-wrapper.component';

@@ -12,7 +12,7 @@
     "sourceMap": true,
     "baseUrl": "./node_modules",
     "paths": {
-      "@gel-core/gel-core": ["../src/index"]
+      "gel-core": ["../src/index"]
     }
   },
   "include": [
